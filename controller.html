@@ -4212,16 +4212,6 @@
             </div>
           </div>
 
-          {showCloseBtn && (
-            <button
-              onPointerDown={(e) => { e.stopPropagation(); if (window.__tkOpenPairPanel) window.__tkOpenPairPanel(); }}
-              title="別の端末と連携（iPhone同士テスト）"
-              className="absolute right-[24px] bottom-[3px] z-[60] no-drag h-5 px-2.5 bg-black/80 hover:bg-greenCustom border border-greenCustom/60 rounded-full text-greenCustom hover:text-bg text-[10px] font-bold cursor-pointer flex items-center justify-center transition-all active:scale-90"
-            >
-              連携
-            </button>
-          )}
-
           <div
             onPointerDown={handleResizeStart}
             onPointerMove={handleResizeMove}
@@ -4401,6 +4391,15 @@
               </div>
             </>
           )}
+
+          <button
+            onPointerDown={(e) => { e.stopPropagation(); }}
+            onPointerUp={(e) => { e.stopPropagation(); if (window.__tkOpenPairPanel) window.__tkOpenPairPanel(); }}
+            title="別の端末と連携（iPhone同士テスト）"
+            className="absolute right-[5vw] bottom-[3vh] z-30 h-9 px-5 bg-black/70 hover:bg-greenCustom border border-greenCustom/70 rounded-full text-greenCustom hover:text-bg text-[13px] font-bold tracking-[2px] cursor-pointer flex items-center justify-center transition-all active:scale-95"
+          >
+            連携
+          </button>
         </div>
       );
     }
