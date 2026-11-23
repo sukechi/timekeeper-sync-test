@@ -52,7 +52,8 @@
       ".tk-pair-card video{width:100%;border-radius:10px;background:#000;display:none;}",
       ".tk-pair-card .note{font-size:11px;color:#8888aa;line-height:1.6;margin-top:10px;}",
       ".tk-pair-card .err{font-size:12px;color:#ff4a4a;min-height:1em;margin-top:4px;}",
-      ".tk-pair-card .info{font-size:12px;color:#28e07a;min-height:1em;margin-top:4px;}"
+      ".tk-pair-card .info{font-size:12px;color:#28e07a;min-height:1em;margin-top:4px;}",
+      ".tk-pair-card .diag{font-size:10px;color:#777799;line-height:1.6;margin-top:6px;word-break:break-all;}"
     ].join("\n");
     document.head.appendChild(st);
   }
@@ -66,6 +67,7 @@
         '<h2>連携（iPhone同士テスト）</h2>' +
         '<div class="sub">方式: 端末同士の直接接続（サーバーなし）<br>PC中継（WebSocket）の従来同期も、使える環境ではそのまま併用されます。</div>' +
         '<div class="status" id="tk-pair-status">未接続</div>' +
+        '<div class="diag" id="tk-pair-diag">診断（この端末の接続候補）: （候補なし）</div>' +
         '<div class="step">手順1: 接続用QRを出す</div>' +
         '<button class="act" id="tk-pair-gen">接続用QRを表示</button>' +
         '<canvas class="qr" id="tk-pair-qr" width="264" height="264" style="display:none"></canvas>' +
@@ -86,6 +88,7 @@
       '</div>';
     document.body.appendChild(panel);
     els.status = panel.querySelector("#tk-pair-status");
+    els.diag = panel.querySelector("#tk-pair-diag");
     els.qr = panel.querySelector("#tk-pair-qr");
     els.offerText = panel.querySelector("#tk-pair-offer-text");
     els.answerText = panel.querySelector("#tk-pair-answer-text");
@@ -106,7 +109,15 @@
       if (s === "connected") setErr("");
       else if (s === "icefailed") setErr(ICE_GUIDE);
     };
+    TKP2P.onCandidates = function () { refreshDiag(); };
     setStatus(TKP2P.status);
+    refreshDiag();
+  }
+
+  // 診断表示: この端末が集めたICE候補の概要（失敗時の切り分け用に小さく出す）
+  function refreshDiag() {
+    if (!els.diag) return;
+    els.diag.textContent = "診断（この端末の接続候補）: " + TKP2P.candidateSummaryText();
   }
 
   function setStatus(s) {
@@ -174,6 +185,7 @@
     els.answerText.value = "";
     setErr("");
     setStatus(TKP2P.status);
+    refreshDiag();
     setInfo("リセットしました。手順1からやり直してください。");
   }
 

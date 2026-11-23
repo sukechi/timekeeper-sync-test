@@ -1,7 +1,10 @@
 // ===== TimeKeeper iPhone同士連携（WebRTC P2P）コア =====
 // サーバーなしで端末同士を直接つなぐ。接続の取り次ぎ（シグナリング）は
 // 接続コード文字列（QRコード／貼り付け）の手動交換で行う。
-// STUN等の外部サーバーは使わない（ホスト候補同士でローカル接続する）。
+// ICE候補はホスト候補（同じWi-Fi／テザリング内の直接接続）が主役。
+// 補助として Google の公開STUNで srflx 候補（自分の外側アドレス）も集める:
+// テザリング共有で両台ともネットに出られる場合に、別経路の候補も試せるようにするため。
+// TURN（中継サーバー）は使わないので、通信自体は端末同士の直接接続のまま。
 //
 // 使い方:
 //   操作側: TKP2P.createOfferCode() -> 接続コード（オファー）
@@ -13,6 +16,12 @@
 //             icefailed は「シグナリングは成立したが端末同士が届かなかった」状態（別ネットワーク等）
 (function () {
   "use strict";
+
+  // ICEサーバー設定。ホスト候補が主役で、STUNは srflx 候補を得るための補助。
+  // TURNは入れない（中継サーバー方式にしない）。
+  var ICE_SERVERS = [
+    { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }
+  ];
 
   function encodePayload(obj) {
     return LZString.compressToEncodedURIComponent(JSON.stringify(obj));
@@ -59,21 +68,61 @@
     acceptedOfferSdp: null, // 表示側: 取り込み済みオファーのSDP（二重適用ガード用）
     _offerPromise: null,    // オファー作成中のPromise（作成の二重実行ガード用）
     _answerPromise: null,   // 応答作成中のPromise
+    localCandidates: [],    // 自分が集めたICE候補（診断表示用）: {type, address, isLocalName}
+    _candKeys: {},          // 候補の重複排除用
     onStatus: null,
     onState: null,
+    onCandidates: null,     // 候補が増えるたびに呼ばれる（引数は診断表示用文字列）
 
     _setStatus: function (s) {
       this.status = s;
       if (this.onStatus) { try { this.onStatus(s); } catch (e) {} }
     },
 
+    // ---- 診断用: 集めたローカルICE候補の記録 ----
+    // candidate文字列からアドレスと種別（typ host/srflx/...）を取り出して蓄積する。
+    // 失敗時の切り分け（候補が .local 名だけか、172.20.10.x 等のIPが出ているか）に使う。
+    _addCandidate: function (candStr) {
+      var m = /candidate:\S+\s+\d+\s+\w+\s+\d+\s+(\S+)\s+\d+\s+typ\s+(\w+)/.exec(candStr || "");
+      if (!m) return;
+      var address = m[1], type = m[2];
+      var key = type + "|" + address;
+      if (this._candKeys[key]) return;
+      this._candKeys[key] = true;
+      this.localCandidates.push({
+        type: type,
+        address: address,
+        isLocalName: /\.local$/i.test(address)
+      });
+      if (this.onCandidates) {
+        try { this.onCandidates(this.candidateSummaryText()); } catch (e) {}
+      }
+    },
+
+    getCandidates: function () { return this.localCandidates.slice(); },
+
+    // 診断表示用の短い文字列。例: "host: xxxx.local / host: 172.20.10.5 / srflx: 203.0.113.9"
+    candidateSummaryText: function () {
+      if (!this.localCandidates.length) return "（候補なし）";
+      return this.localCandidates.map(function (c) {
+        return c.type + ": " + c.address;
+      }).join(" / ");
+    },
+
     _newPc: function () {
       if (this.pc) { try { this.pc.close(); } catch (e) {} this.pc = null; this.dc = null; }
       this.answerApplied = false;
       this.acceptedOfferSdp = null;
+      this.localCandidates = [];
+      this._candKeys = {};
       if (this._iceTimer) { clearTimeout(this._iceTimer); this._iceTimer = null; }
-      var pc = new RTCPeerConnection(); // iceServers なし = ホスト候補のみ
+      // ホスト候補が主役。STUNは srflx 候補の補助（ICE_SERVERS のコメント参照）。
+      var pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       var self = this;
+      pc.onicecandidate = function (ev) {
+        if (self.pc !== pc || !ev.candidate) return;
+        self._addCandidate(ev.candidate.candidate);
+      };
       pc.onconnectionstatechange = function () {
         if (pc.connectionState === "connected") self._setStatus("connected");
         else if (pc.connectionState === "failed") self._setStatus("icefailed");
@@ -130,6 +179,11 @@
       this.acceptedOfferSdp = null;
       this._offerPromise = null;
       this._answerPromise = null;
+      this.localCandidates = [];
+      this._candKeys = {};
+      if (this.onCandidates) {
+        try { this.onCandidates(this.candidateSummaryText()); } catch (e) {}
+      }
       this._setStatus("idle");
     },
 
@@ -284,6 +338,13 @@
     signalingState: function () { return TKP2P.pc ? TKP2P.pc.signalingState : null; },
     answerApplied: function () { return TKP2P.answerApplied; },
     pc: function () { return TKP2P.pc; },
+    candidates: function () { return TKP2P.getCandidates(); },
+    candidateSummaryText: function () { return TKP2P.candidateSummaryText(); },
+    iceServers: function () {
+      if (!TKP2P.pc || !TKP2P.pc.getConfiguration) return null;
+      var cfg = TKP2P.pc.getConfiguration();
+      return cfg ? cfg.iceServers : null;
+    },
     decodePayload: decodePayload
   };
 })();

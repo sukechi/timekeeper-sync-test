@@ -44,6 +44,7 @@
       ".tk-pair-card textarea{width:100%;box-sizing:border-box;background:#0f0f1c;color:#aab;border:1px solid #2a2a44;border-radius:8px;font-size:10px;padding:6px;word-break:break-all;}",
       ".tk-pair-card button.act{display:block;width:100%;padding:12px;border-radius:10px;border:1px solid #28e07a;background:rgba(40,224,122,.12);color:#28e07a;font-size:15px;font-weight:bold;cursor:pointer;margin:8px 0;}",
       ".tk-pair-card .err{font-size:13px;color:#ff5252;min-height:1em;margin-top:6px;}",
+      ".tk-pair-card .diag{font-size:10px;color:#777788;line-height:1.6;margin-top:8px;word-break:break-all;text-align:left;}",
       "#tk-pair-reopen{position:fixed;right:10px;bottom:10px;z-index:900;padding:8px 14px;border-radius:999px;border:1px solid #28e07a88;background:rgba(6,6,14,.85);color:#28e07a;font-size:13px;font-weight:bold;cursor:pointer;display:none;}"
     ].join("\n");
     document.head.appendChild(st);
@@ -59,6 +60,7 @@
         '<div class="sub">操作側のTimeKeeperと直接つながります（サーバーなし）。<br>' +
         '応答用QRが表示されたら、操作側の「連携」パネルで読んでください。</div>' +
         '<div class="status" id="tk-disp-status">未接続</div>' +
+        '<div class="diag" id="tk-disp-diag">診断（この端末の接続候補）: （候補なし）</div>' +
         '<canvas class="qr" id="tk-disp-qr" width="300" height="300" style="display:none"></canvas>' +
         '<textarea id="tk-disp-answer" rows="3" readonly style="display:none"></textarea>' +
         '<div id="tk-disp-manual">' +
@@ -69,6 +71,7 @@
       '</div>';
     document.body.appendChild(overlay);
     els.status = overlay.querySelector("#tk-disp-status");
+    els.diag = overlay.querySelector("#tk-disp-diag");
     els.qr = overlay.querySelector("#tk-disp-qr");
     els.answer = overlay.querySelector("#tk-disp-answer");
     els.offer = overlay.querySelector("#tk-disp-offer");
@@ -99,7 +102,15 @@
         if (window.__tkSetP2PConnected) window.__tkSetP2PConnected(false);
       }
     };
+    TKP2P.onCandidates = function () { refreshDiag(); };
     setStatus(TKP2P.status);
+    refreshDiag();
+  }
+
+  // 診断表示: この端末が集めたICE候補の概要（失敗時の切り分け用に小さく出す）
+  function refreshDiag() {
+    if (!els.diag) return;
+    els.diag.textContent = "診断（この端末の接続候補）: " + TKP2P.candidateSummaryText();
   }
 
   function setStatus(s) {
