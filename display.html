@@ -135,11 +135,17 @@
   }
   #conn.ok .dot { background: #57d977; }
   #conn.ng .dot { background: #ff5252; }
-  #rows {
+  .list-subhead {
+    font-size: clamp(12px, 1.5vw, 20px);
+    letter-spacing: 0.18em;
+    color: #9a97a8;
+    margin: 0.7vh 0 0.5vh;
+  }
+  .rows {
     display: flex;
     flex-direction: column;
     gap: 0.6vh;
-    max-height: 27vh;
+    max-height: 13vh;
     overflow: hidden;
   }
   .row {
@@ -223,10 +229,13 @@
 
   <div class="list-wrap">
     <div class="list-head">
-      <div id="list-title">操作側のタブ <b>—</b></div>
+      <div id="list-title"><b>TM / CD</b> 一覧</div>
       <div id="conn" class="ng"><span class="dot"></span><span id="conn-text">未接続</span></div>
     </div>
-    <div id="rows"><div class="row-empty">操作側の接続を待っています</div></div>
+    <div class="list-subhead">TM（タイマー）</div>
+    <div id="tm-rows" class="rows"><div class="row-empty">操作側の接続を待っています</div></div>
+    <div class="list-subhead">CD（カウントダウン）</div>
+    <div id="cd-rows" class="rows"><div class="row-empty">操作側の接続を待っています</div></div>
   </div>
 
 <script>
@@ -254,6 +263,41 @@
     return fmt(Math.ceil(Math.max(0, ms) / 1000) * 1000);
   }
 
+  // ===== カウントダウン表示の丸め（操作側の本体・モニター出力と完全一致） =====
+  // 操作側の規則（controller.html の roundUpToSecond / formatTime）:
+  //   残り時間は「秒へ切り上げ」、超過分は「絶対値を切り捨て」。
+  // 以前は表示側の一部（メイン・一覧行）が切り捨てで計算しており、
+  // 操作側よりほぼ常時1秒小さい数字が出ていた（実機で「表示側が1秒遅れる」見え方）。
+  // ここに集約し、メイン・一覧の全経路で同じ規則を使う。
+
+  // TMメイン用（本体の別モニター出力＝FloatingOutput と同じ規則。
+  // 超過判定も steal 適用後の残りで行う）
+  function tmMainView(tm, vNow, tmSteal) {
+    var base = tm.running ? (tm.endAt - vNow) : tm.remaining;
+    var off = tmSteal > 0 ? base - tmSteal * 1000 : base;
+    if (tm.done) return { text: "完了", over: false, done: true, base: base, off: off };
+    if (off < 0) return { text: "+" + fmt(Math.abs(off)), over: true, done: false, base: base, off: off };
+    return { text: fmtCeil(off), over: false, done: false, base: base, off: off };
+  }
+
+  // TM一覧行用（本体のTMカード＝TimerItem と同じ規則。
+  // 超過判定は steal を引く前の残りで行い、超過表示にも steal を適用しない）
+  function tmRowView(tm, vNow, tmSteal) {
+    var delta = tm.running ? (tm.endAt - vNow) : tm.remaining;
+    if (tm.done) return { text: "完了", over: false, done: true };
+    if (delta < 0) return { text: "+" + fmt(Math.abs(delta)), over: true, done: false };
+    var off = tmSteal > 0 ? delta - tmSteal * 1000 : delta;
+    return { text: fmtCeil(Math.max(0, off)), over: false, done: false };
+  }
+
+  // CD用（本体のCDカード＝CountdownItem／別モニター出力と同じ規則。
+  // steal は常時適用し、目標ちょうど（残り0）も「過ぎた」側に倒す）
+  function cdView(item, vNow, cdSteal) {
+    var diff = item.target - vNow - (cdSteal > 0 ? cdSteal * 1000 : 0);
+    if (diff <= 0) return { text: "+" + fmt(Math.abs(diff)), over: true };
+    return { text: fmtCeil(diff), over: false };
+  }
+
   function clockStr(ts) {
     var d = new Date(ts);
     return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
@@ -265,19 +309,14 @@
     return Date.now() + skewMs + offset;
   }
 
-  function tmRemaining(tm, vNow) {
-    if (tm.done) return 0;
-    return tm.running ? (tm.endAt - vNow) : tm.remaining;
-  }
-
   function swElapsed(sw, nowReal) {
     if (!sw) return 0;
     return sw.running ? sw.accumulated + (nowReal - sw.startedAt) : sw.accumulated;
   }
 
-  var TAB_NAMES = { cd: "CD（カウントダウン）", tm: "TM（タイマー）", sw: "SW（ストップウォッチ）", calc: "CALC（計算）" };
-
   // 別モニター出力の対象を引く（選ばれていて実在するときだけ）
+  // 表示側に出すのは TM / CD のみ（ユーザー指定）。SW が出力に選ばれていても
+  // 表示側のメインには使わない（TM/CD の通常ルールに落とす）。
   function resolveOutput(st) {
     var key = st.activeOutputKey;
     if (!key || !key.type) return null;
@@ -291,11 +330,12 @@
       for (var j = 0; j < cds.length; j++) if (cds[j].id === key.id) return { kind: "cd", item: cds[j] };
       return null;
     }
-    if (key.type === "sw") return { kind: "sw", item: st.stopwatchState };
     return null;
   }
 
-  // 出力が選ばれていないときのメイン選択（従来通り：操作側で開いているタブを優先）
+  // 出力が選ばれていないときのメイン選択。
+  // 操作側のタブには連動しない（タブを切り替えてもメインは切り替わらない）。
+  // 動作中のTM → 最も近いCD → 先頭のTM の順。
   function pickMain(st) {
     var timers = st.timers || [];
     var cds = st.countdownTargets || [];
@@ -308,18 +348,15 @@
     for (var j = 0; j < cds.length; j++) {
       if (!nearestCd || cds[j].target < nearestCd.target) nearestCd = cds[j];
     }
-    var tab = st.currentTab || "tm";
-    if (tab === "tm" && (runningTm || firstTm)) return { kind: "tm", item: runningTm || firstTm };
-    if (tab === "cd" && nearestCd) return { kind: "cd", item: nearestCd };
-    if (tab === "sw") return { kind: "sw", item: st.stopwatchState };
     if (runningTm) return { kind: "tm", item: runningTm };
     if (nearestCd) return { kind: "cd", item: nearestCd };
     if (firstTm) return { kind: "tm", item: firstTm };
-    return { kind: "sw", item: st.stopwatchState };
+    return { kind: "none", item: null };
   }
 
   // メイン表示の内容を組み立てる。
-  // 出力中は本体のモニター出力と同じ内容（ラベル表記・steal適用・切り上げ）にそろえる。
+  // 出力の選択有無にかかわらず、本体のモニター出力と同じ計算・丸めにそろえる
+  // （ラベル表記だけが出力選択時に「ラベル [全体]」になる）。
   function buildMainView(st, vNow, realNow) {
     var output = resolveOutput(st);
     var fromOutput = !!output;
@@ -330,41 +367,28 @@
 
     if (main.kind === "tm") {
       var tm = main.item;
-      view.label = tm.label ? (tm.label + " [" + fmt(tm.totalMs) + "]") : fmt(tm.totalMs);
-      if (fromOutput) {
-        var base = tm.running ? (tm.endAt - vNow) : tm.remaining;
-        var off = tmSteal > 0 ? base - tmSteal * 1000 : base;
-        view.done = !!tm.done;
-        view.over = !tm.done && off < 0;
-        view.timeText = tm.done ? "完了" : (view.over ? "+" + fmt(Math.abs(off)) : fmtCeil(off));
-        view.subText = tm.done ? "完了" : (tm.running ? "進行中" : "停止中");
-        view.diffMs = tm.running ? off : null;
-        view.elapsedMs = tm.totalMs - base;
-      } else {
-        // 従来の表示（ラベルはそのまま、stealは進行中のみ適用）
-        view.label = tm.label || "タイマー";
-        var rem = tmRemaining(tm, vNow) - (tm.running && tmSteal > 0 ? tmSteal * 1000 : 0);
-        view.done = !!tm.done;
-        view.over = rem < 0 && tm.running;
-        view.timeText = tm.done ? "0:00" : (view.over ? "+" + fmt(rem) : fmt(Math.max(0, rem)));
-        view.subText = tm.done ? "完了" : (tm.running ? "進行中" : "停止中");
-        view.diffMs = tm.running ? tmRemaining(tm, vNow) : null;
-        view.elapsedMs = tm.totalMs - tmRemaining(tm, vNow);
-      }
+      var mv = tmMainView(tm, vNow, tmSteal);
+      view.label = fromOutput
+        ? (tm.label ? (tm.label + " [" + fmt(tm.totalMs) + "]") : fmt(tm.totalMs))
+        : (tm.label || "タイマー");
+      view.done = mv.done;
+      view.over = mv.over;
+      view.timeText = mv.text;
+      view.subText = mv.done ? "完了" : (tm.running ? "進行中" : "停止中");
+      view.diffMs = (tm.running && !mv.done) ? mv.off : null;
+      view.elapsedMs = tm.totalMs - mv.base;
     } else if (main.kind === "cd") {
       var item = main.item;
+      var cv = cdView(item, vNow, cdSteal);
       view.label = item.label || clockStr(item.target);
-      var cdRem = item.target - vNow - (fromOutput && cdSteal > 0 ? cdSteal * 1000 : 0);
-      view.over = cdRem < 0;
-      view.timeText = view.over ? "+" + fmt(Math.abs(cdRem)) : (fromOutput ? fmtCeil(cdRem) : fmt(cdRem));
-      view.subText = view.over ? "時刻を過ぎています" : "目標時刻まで";
+      view.over = cv.over;
+      view.timeText = cv.text;
+      view.subText = cv.over ? "時刻を過ぎています" : "目標時刻まで";
       view.diffMs = null;
     } else {
-      var el = swElapsed(st.stopwatchState, realNow);
-      view.label = fromOutput ? "SW" : "ストップウォッチ";
-      view.timeText = fmt(el);
-      view.subText = st.stopwatchState && st.stopwatchState.running ? "計測中" : "停止中";
-      view.elapsedMs = el;
+      view.label = "TM / CD";
+      view.timeText = "--:--";
+      view.subText = "動作中のタイマーはありません";
     }
     return view;
   }
@@ -389,10 +413,13 @@
     return null;
   }
 
-  // ---------------- 一覧（操作側と同じタブ・同じ項目・同じ順序） ----------------
-  var listSig = "";
-  var rowTimeEls = {};   // "tm:<id>" 等 -> 時間表示element
-  var rowKindOf = {};    // 同上 -> {kind, item}（毎tickの時間更新用）
+  // ---------------- 一覧（TM一覧＋CD一覧の固定表示） ----------------
+  // 操作側のタブには連動しない。TM と CD の両方を常にこの順で出す。
+  // SW / CALC は表示側に出さない（ユーザー指定）。
+  var sections = {
+    tm: { sig: "", kindOf: {}, timeEls: {} },
+    cd: { sig: "", kindOf: {}, timeEls: {} }
+  };
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -401,145 +428,107 @@
   }
 
   // 一覧の骨組み（行の並び・ラベル・状態）を作る。時刻だけは毎tick別に更新する。
-  function buildRows(st, main, output, nextId) {
-    var tab = st.currentTab || "tm";
-    var rows = [];   // {key, label, sub, stateText, stateCls, badges:[{text,cls}], isMain}
-    var i, it;
-
-    if (tab === "tm") {
-      var timers = st.timers || [];
-      for (i = 0; i < timers.length; i++) {
-        it = timers[i];
-        rows.push({
-          key: "tm:" + it.id, kind: "tm", item: it,
-          label: it.label || fmt(it.totalMs),
-          sub: "全 " + fmt(it.totalMs),
-          stateText: it.done ? "完了" : (it.running ? "進行中" : "停止中"),
-          stateCls: it.done ? "done" : (it.running ? "run" : ""),
-          isMain: main.kind === "tm" && main.item === it,
-          isOut: !!(output && output.kind === "tm" && output.item === it),
-          isNext: nextId === "tm:" + it.id
-        });
-      }
-      if (!rows.length) rows.push({ empty: "タイマーはまだありません" });
-    } else if (tab === "cd") {
-      var cds = st.countdownTargets || [];
-      for (i = 0; i < cds.length; i++) {
-        it = cds[i];
-        rows.push({
-          key: "cd:" + it.id, kind: "cd", item: it,
-          label: it.label || clockStr(it.target),
-          sub: "目標 " + clockStr(it.target),
-          stateText: "カウント中",
-          stateCls: "",
-          isMain: main.kind === "cd" && main.item === it,
-          isOut: !!(output && output.kind === "cd" && output.item === it),
-          isNext: nextId === "cd:" + it.id
-        });
-      }
-      if (!rows.length) rows.push({ empty: "カウントダウンはまだありません" });
-    } else if (tab === "sw") {
-      var sw = st.stopwatchState || { running: false, accumulated: 0, startedAt: null, laps: [] };
+  function buildTmRows(st, main, output, nextId) {
+    var rows = [];
+    var timers = st.timers || [];
+    for (var i = 0; i < timers.length; i++) {
+      var it = timers[i];
       rows.push({
-        key: "sw:total", kind: "sw", item: sw,
-        label: "ストップウォッチ",
-        sub: "TOTAL",
-        stateText: sw.running ? "計測中" : "停止中",
-        stateCls: sw.running ? "run" : "",
-        isMain: main.kind === "sw",
-        isOut: !!(output && output.kind === "sw"),
-        isNext: false
+        key: "tm:" + it.id, kind: "tm", item: it,
+        label: it.label || fmt(it.totalMs),
+        sub: "全 " + fmt(it.totalMs),
+        stateText: it.done ? "完了" : (it.running ? "進行中" : "停止中"),
+        stateCls: it.done ? "done" : (it.running ? "run" : ""),
+        isMain: main.kind === "tm" && main.item === it,
+        isOut: !!(output && output.kind === "tm" && output.item === it),
+        isNext: nextId === "tm:" + it.id
       });
-      var laps = sw.laps || [];
-      for (i = laps.length - 1; i >= 0; i--) {
-        var lap = laps[i];
-        rows.push({
-          key: "sw:lap:" + lap.num, kind: "lap", item: lap,
-          label: "LAP " + lap.num,
-          sub: "区間 " + fmt(lap.split),
-          stateText: "合計 " + fmt(lap.total),
-          stateCls: "",
-          isMain: false, isOut: false, isNext: false, fixedTime: fmt(lap.total)
-        });
-      }
-    } else {
-      rows.push({ empty: "CALCタブにはタイマー項目がありません" });
     }
+    if (!rows.length) rows.push({ empty: "タイマーはまだありません" });
     return rows;
   }
 
-  function renderList(st, main, output, vNow, realNow) {
-    var tab = st.currentTab || "tm";
-    $("list-title").innerHTML = "操作側のタブ <b>" + esc(TAB_NAMES[tab] || tab) + "</b>" +
-      (output ? "　／　別モニター出力の内容を共有中" : "");
-
-    var nextId = pickNextId(st, main);
-    var rows = buildRows(st, main, output, nextId);
-
-    // CD行は目標時刻を過ぎたら「超過」に切り替える
-    for (var k = 0; k < rows.length; k++) {
-      if (rows[k].kind === "cd" && rows[k].item.target - vNow < 0) {
-        rows[k].stateText = "超過";
-        rows[k].stateCls = "over";
-      }
+  function buildCdRows(st, main, output, nextId, vNow, cdSteal) {
+    var rows = [];
+    var cds = st.countdownTargets || [];
+    for (var i = 0; i < cds.length; i++) {
+      var it = cds[i];
+      var over = cdView(it, vNow, cdSteal).over;
+      rows.push({
+        key: "cd:" + it.id, kind: "cd", item: it,
+        label: it.label || clockStr(it.target),
+        sub: "目標 " + clockStr(it.target),
+        stateText: over ? "超過" : "カウント中",
+        stateCls: over ? "over" : "",
+        isMain: main.kind === "cd" && main.item === it,
+        isOut: !!(output && output.kind === "cd" && output.item === it),
+        isNext: nextId === "cd:" + it.id
+      });
     }
+    if (!rows.length) rows.push({ empty: "カウントダウンはまだありません" });
+    return rows;
+  }
 
-    // 骨組みの署名（並び・状態・メイン/出力/つぎ が変わったら作り直す）
-    var sig = tab + "|" + (output ? output.kind : "-") + "|" + (nextId || "-");
+  function renderSection(secName, containerId, rows) {
+    var sec = sections[secName];
+    var sig = "";
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
       sig += "|" + (r.empty || (r.key + ":" + r.stateText + ":" + (r.isMain ? 1 : 0) + ":" + (r.isOut ? 1 : 0) + ":" + (r.isNext ? 1 : 0)));
     }
-
-    if (sig !== listSig) {
-      listSig = sig;
-      rowTimeEls = {};
-      rowKindOf = {};
-      var html = "";
-      for (i = 0; i < rows.length; i++) {
-        r = rows[i];
-        if (r.empty) { html += '<div class="row-empty">' + esc(r.empty) + "</div>"; continue; }
-        html += '<div class="row' + (r.isMain ? " is-main" : "") + '">' +
-          '<div class="r-label">' + esc(r.label) + "</div>" +
-          (r.sub ? '<div class="r-sub mono">' + esc(r.sub) + "</div>" : "") +
-          '<div class="r-time mono" data-k="' + esc(r.key) + '">--:--</div>' +
-          '<div class="r-state ' + esc(r.stateCls || "") + '">' + esc(r.stateText) + "</div>" +
-          (r.isOut ? '<div class="r-badge out">出力中</div>' : "") +
-          (r.isNext ? '<div class="r-badge next">つぎ</div>' : "") +
-          "</div>";
-        rowKindOf[r.key] = r;
-      }
-      $("rows").innerHTML = html;
-      var els = $("rows").querySelectorAll(".r-time");
-      for (i = 0; i < els.length; i++) rowTimeEls[els[i].getAttribute("data-k")] = els[i];
+    if (sig === sec.sig) return;
+    sec.sig = sig;
+    sec.kindOf = {};
+    sec.timeEls = {};
+    var html = "";
+    for (i = 0; i < rows.length; i++) {
+      r = rows[i];
+      if (r.empty) { html += '<div class="row-empty">' + esc(r.empty) + "</div>"; continue; }
+      html += '<div class="row' + (r.isMain ? " is-main" : "") + '">' +
+        '<div class="r-label">' + esc(r.label) + "</div>" +
+        (r.sub ? '<div class="r-sub mono">' + esc(r.sub) + "</div>" : "") +
+        '<div class="r-time mono" data-k="' + esc(r.key) + '">--:--</div>' +
+        '<div class="r-state ' + esc(r.stateCls || "") + '">' + esc(r.stateText) + "</div>" +
+        (r.isOut ? '<div class="r-badge out">出力中</div>' : "") +
+        (r.isNext ? '<div class="r-badge next">つぎ</div>' : "") +
+        "</div>";
+      sec.kindOf[r.key] = r;
     }
+    $(containerId).innerHTML = html;
+    var els = $(containerId).querySelectorAll(".r-time");
+    for (i = 0; i < els.length; i++) sec.timeEls[els[i].getAttribute("data-k")] = els[i];
+  }
 
-    // 時刻の更新（毎tick）
+  // 時刻の更新（毎tick）。丸めは操作側と同一規則のヘルパーで計算する。
+  function updateSectionTimes(secName, st, vNow) {
+    var sec = sections[secName];
     var tmSteal = typeof st.tmSteal === "number" ? st.tmSteal : 0;
-    for (var key in rowKindOf) {
-      var row = rowKindOf[key];
-      var el = rowTimeEls[key];
+    var cdSteal = typeof st.cdSteal === "number" ? st.cdSteal : 0;
+    for (var key in sec.kindOf) {
+      var row = sec.kindOf[key];
+      var el = sec.timeEls[key];
       if (!el) continue;
       if (row.kind === "tm") {
-        var tm = row.item;
-        if (tm.done) { el.textContent = "完了"; el.className = "r-time mono"; }
-        else {
-          var rem = tmRemaining(tm, vNow) - (tm.running && tmSteal > 0 ? tmSteal * 1000 : 0);
-          el.textContent = rem < 0 ? "+" + fmt(rem) : fmt(Math.max(0, rem));
-          el.className = "r-time mono" + (rem < 0 && tm.running ? " over" : "");
-        }
+        var v = tmRowView(row.item, vNow, tmSteal);
+        el.textContent = v.text;
+        el.className = "r-time mono" + (v.over ? " over" : "");
       } else if (row.kind === "cd") {
-        var cdRem = row.item.target - vNow;
-        el.textContent = cdRem < 0 ? "+" + fmt(cdRem) : fmt(cdRem);
-        el.className = "r-time mono" + (cdRem < 0 ? " over" : "");
-      } else if (row.kind === "sw") {
-        el.textContent = fmt(swElapsed(st.stopwatchState, realNow));
-        el.className = "r-time mono";
-      } else if (row.kind === "lap") {
-        el.textContent = row.fixedTime;
-        el.className = "r-time mono";
+        var cv = cdView(row.item, vNow, cdSteal);
+        el.textContent = cv.text;
+        el.className = "r-time mono" + (cv.over ? " over" : "");
       }
     }
+  }
+
+  function renderList(st, main, output, vNow, realNow) {
+    $("list-title").innerHTML = "<b>TM / CD</b> 一覧" +
+      (output ? "　／　別モニター出力の内容を共有中" : "");
+    var nextId = pickNextId(st, main);
+    var cdSteal = typeof st.cdSteal === "number" ? st.cdSteal : 0;
+    renderSection("tm", "tm-rows", buildTmRows(st, main, output, nextId));
+    renderSection("cd", "cd-rows", buildCdRows(st, main, output, nextId, vNow, cdSteal));
+    updateSectionTimes("tm", st, vNow);
+    updateSectionTimes("cd", st, vNow);
   }
 
   function render() {
@@ -574,13 +563,14 @@
     $("overall").textContent = fmt(overall);
 
     // 押し具合: メインTMが超過していれば「押し +M:SS」、進行中なら残りを表示
+    // （丸めはメイン表示と同じ: 残りは切り上げ、超過は切り捨て）
     var diffEl = $("diff");
     if (view.kind === "tm" && view.diffMs !== null) {
       if (view.diffMs < 0) {
         diffEl.textContent = "押し +" + fmt(Math.abs(view.diffMs));
         diffEl.className = "mono over";
       } else {
-        diffEl.textContent = "残り " + fmt(view.diffMs);
+        diffEl.textContent = "残り " + fmtCeil(view.diffMs);
         diffEl.className = "mono";
       }
     } else if (view.kind === "cd" && view.over) {
