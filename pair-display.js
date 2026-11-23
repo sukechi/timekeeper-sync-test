@@ -19,8 +19,12 @@
     connecting: "接続中…",
     connected: "接続完了",
     closed: "切断されました",
-    error: "エラー（やり直してください）"
+    error: "エラー（やり直してください）",
+    icefailed: "つながりませんでした"
   };
+
+  // ICE失敗時（別ネットワーク等で端末同士が届かなかったとき）の案内
+  var ICE_GUIDE = "つながりませんでした。2台が同じWi-Fiか、片方の「インターネット共有」にそろっているか確認してください。そのうえで、操作側の新しい接続用QRを、この端末のカメラで読み直してください。";
 
   var overlay = null, els = {};
 
@@ -84,9 +88,13 @@
     TKP2P.onStatus = function (s) {
       setStatus(s);
       if (s === "connected") {
+        setErr("");
         overlay.classList.add("hidden");
         els.reopen.style.display = "block";
         if (window.__tkSetP2PConnected) window.__tkSetP2PConnected(true);
+      } else if (s === "icefailed") {
+        setErr(ICE_GUIDE);
+        if (window.__tkSetP2PConnected) window.__tkSetP2PConnected(false);
       } else if (s === "closed" || s === "error") {
         if (window.__tkSetP2PConnected) window.__tkSetP2PConnected(false);
       }
@@ -110,7 +118,12 @@
       els.answer.style.display = "block";
       els.answer.value = answerCode;
       els.manual.style.display = "none";
-    }).catch(function (e) { setErr(e.message || "接続コードを取り込めませんでした"); });
+    }).catch(function (e) {
+      if (window.console && console.error) console.error("接続コードの取り込みに失敗:", e);
+      // 読み取り不良など、対処が明確なものだけ内容を表示し、それ以外は案内文にする
+      if (e && /読み取れませんでした/.test(e.message || "")) setErr(e.message);
+      else setErr("うまくいきませんでした。操作側で接続用QRを出し直して、もう一度読み取るか、コードを貼り直してください。");
+    });
   }
 
   build();

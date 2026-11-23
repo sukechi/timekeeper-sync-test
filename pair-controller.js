@@ -1,4 +1,4 @@
-// ===== 操作側: 連携パネル（フローティング出力ウィンドウの「連携」ボタンから開く） =====
+// ===== 操作側: 連携パネル（右上の実時計をダブルタップして開く全画面時計ビューの「連携」ボタンから開く） =====
 // 方式は WebRTC の端末同士の直接接続（サーバーなし）。接続の取り次ぎは QR の往復:
 //   1) このパネルで接続用QR（表示ページURL＋接続コード）を表示する
 //   2) 相手端末がカメラで読むと表示ページが開き、応答用QRが出る
@@ -22,8 +22,12 @@
     connecting: "接続中…",
     connected: "接続完了（連携中）",
     closed: "切断されました",
-    error: "エラー（やり直してください）"
+    error: "エラー（やり直してください）",
+    icefailed: "つながりませんでした"
   };
+
+  // ICE失敗時（別ネットワーク等で端末同士が届かなかったとき）の案内
+  var ICE_GUIDE = "つながりませんでした。2台が同じWi-Fiか、片方の「インターネット共有」にそろっているか確認してください。そのうえで、下の「最初からやり直す（リセット）」からやり直してください。";
 
   var panel = null, els = {};
   var scanStream = null, scanTimer = null;
@@ -47,7 +51,8 @@
       ".tk-pair-card canvas.qr{display:block;margin:8px auto;background:#fff;border-radius:8px;max-width:78vw;height:auto;}",
       ".tk-pair-card video{width:100%;border-radius:10px;background:#000;display:none;}",
       ".tk-pair-card .note{font-size:11px;color:#8888aa;line-height:1.6;margin-top:10px;}",
-      ".tk-pair-card .err{font-size:12px;color:#ff4a4a;min-height:1em;margin-top:4px;}"
+      ".tk-pair-card .err{font-size:12px;color:#ff4a4a;min-height:1em;margin-top:4px;}",
+      ".tk-pair-card .info{font-size:12px;color:#28e07a;min-height:1em;margin-top:4px;}"
     ].join("\n");
     document.head.appendChild(st);
   }
@@ -73,8 +78,10 @@
         '<textarea id="tk-pair-answer-text" rows="3" placeholder="応答コードを貼り付けても接続できます"></textarea>' +
         '<button class="sub-act" id="tk-pair-accept">貼り付けた応答コードで接続</button>' +
         '<div class="err" id="tk-pair-err"></div>' +
+        '<div class="info" id="tk-pair-info"></div>' +
         '<div class="note">サーバーを使わない方式のため、QRの往復（出す → 読む → 応答を読む）が必要です。' +
         '両方の端末を、同じWi-Fiか、片方の「インターネット共有」にそろえてください。</div>' +
+        '<button class="sub-act" id="tk-pair-reset">最初からやり直す（リセット）</button>' +
         '<button class="sub-act" id="tk-pair-close">閉じる</button>' +
       '</div>';
     document.body.appendChild(panel);
@@ -84,6 +91,7 @@
     els.answerText = panel.querySelector("#tk-pair-answer-text");
     els.video = panel.querySelector("#tk-pair-video");
     els.err = panel.querySelector("#tk-pair-err");
+    els.info = panel.querySelector("#tk-pair-info");
 
     panel.querySelector("#tk-pair-close").addEventListener("click", closePanel);
     panel.querySelector("#tk-pair-gen").addEventListener("click", generateOffer);
@@ -91,8 +99,13 @@
     panel.querySelector("#tk-pair-accept").addEventListener("click", function () {
       acceptAnswer(els.answerText.value);
     });
+    panel.querySelector("#tk-pair-reset").addEventListener("click", resetAll);
 
-    TKP2P.onStatus = function (s) { setStatus(s); };
+    TKP2P.onStatus = function (s) {
+      setStatus(s);
+      if (s === "connected") setErr("");
+      else if (s === "icefailed") setErr(ICE_GUIDE);
+    };
     setStatus(TKP2P.status);
   }
 
@@ -103,6 +116,10 @@
   }
 
   function setErr(msg) { if (els.err) els.err.textContent = msg || ""; }
+  function setInfo(msg) { if (els.info) els.info.textContent = msg || ""; }
+
+  // 失敗時に出す案内（生の英語エラーをそのまま表示しない）
+  var GUIDE = "うまくいきませんでした。両方の端末でページを再読み込みして、手順1から1回だけ、順番にやってみてください。";
 
   function displayUrl(code) {
     var u = new URL("display.html", window.location.href);
@@ -113,6 +130,9 @@
   var lastOfferUrl = null;
   function generateOffer() {
     setErr("");
+    setInfo("");
+    // すでにオファーを出している場合は TKP2P 側で同じコードが返る（作り直されない）。
+    // 最初からやり直すときだけ「最初からやり直す（リセット）」を使う。
     TKP2P.createOfferCode().then(function (code) {
       lastOfferUrl = displayUrl(code);
       window.__tkPair.getOfferUrl = function () { return lastOfferUrl; };
@@ -120,15 +140,41 @@
       TKQR.draw(els.qr, lastOfferUrl, 264);
       els.offerText.style.display = "block";
       els.offerText.value = lastOfferUrl;
-    }).catch(function (e) { setErr("QRを作れませんでした: " + e.message); });
+    }).catch(function (e) {
+      if (window.console && console.error) console.error("接続用QRの作成に失敗:", e);
+      setErr(GUIDE);
+    });
   }
 
   function acceptAnswer(text) {
     setErr("");
+    setInfo("");
     if (!text || !text.trim()) { setErr("応答コードが空です"); return; }
-    TKP2P.acceptAnswerCode(text).then(function () {
+    TKP2P.acceptAnswerCode(text).then(function (res) {
+      if (res && res.alreadyApplied) {
+        setInfo("その応答はすでに取り込み済みです。接続が進んでいるので、そのままお待ちください。");
+      }
       // 接続完了は onStatus で表示される
-    }).catch(function (e) { setErr(e.message || "応答コードを取り込めませんでした"); });
+    }).catch(function (e) {
+      if (window.console && console.error) console.error("応答コードの取り込みに失敗:", e);
+      // 読み取り不良など、対処が明確なものだけ内容を表示し、それ以外は案内文にする
+      if (e && /読み取れませんでした|先に接続用QR/.test(e.message || "")) setErr(e.message);
+      else setErr(GUIDE);
+    });
+  }
+
+  // 明示的なリセット: 接続を破棄し、パネル表示も最初の状態に戻す
+  function resetAll() {
+    stopScan();
+    try { TKP2P.reset(); } catch (e) {}
+    lastOfferUrl = null;
+    els.qr.style.display = "none";
+    els.offerText.style.display = "none";
+    els.offerText.value = "";
+    els.answerText.value = "";
+    setErr("");
+    setStatus(TKP2P.status);
+    setInfo("リセットしました。手順1からやり直してください。");
   }
 
   // ---- カメラ読み取り（jsQR） ----
