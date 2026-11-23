@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TimeKeeper 表示（iPhone同士連携テスト）</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #06060e;
+    color: #f5f2ea;
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    overflow: hidden;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    padding: 2.2vh 2.5vw;
+  }
+  .mono { font-family: "Share Tech Mono", "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+
+  /* 上段: 左=現在時刻 / 右=全体経過＋押し具合 */
+  .top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 2vw;
+  }
+  .block-label {
+    font-size: clamp(12px, 1.6vw, 20px);
+    letter-spacing: 0.25em;
+    color: #9a97a8;
+    margin-bottom: 0.4vh;
+  }
+  #clock {
+    font-size: clamp(34px, 4.6vw, 68px);
+    font-weight: 700;
+    line-height: 1;
+  }
+  #clock-date {
+    font-size: clamp(13px, 1.5vw, 20px);
+    color: #9a97a8;
+    margin-top: 0.6vh;
+  }
+  .top-right { text-align: right; }
+  #overall {
+    font-size: clamp(30px, 4vw, 60px);
+    font-weight: 700;
+    line-height: 1;
+  }
+  #diff {
+    font-size: clamp(20px, 2.6vw, 40px);
+    font-weight: 700;
+    margin-top: 0.8vh;
+    color: #9a97a8;
+  }
+  #diff.over { color: #ff5252; }
+
+  /* 中央: メインタイマー特大 */
+  .center {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+  }
+  #main-label {
+    font-size: clamp(22px, 3.4vw, 52px);
+    font-weight: 600;
+    color: #f0a030;
+    letter-spacing: 0.08em;
+    text-align: center;
+    max-width: 92vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #main-time {
+    font-size: clamp(80px, 17vw, 280px);
+    font-weight: 800;
+    line-height: 1.05;
+    text-align: center;
+    text-shadow: 0 0 60px rgba(240, 160, 48, 0.18);
+  }
+  #main-time.over { color: #ff5252; text-shadow: 0 0 60px rgba(255, 82, 82, 0.25); }
+  #main-time.done { color: #57d977; text-shadow: 0 0 60px rgba(87, 217, 119, 0.25); }
+  #main-sub {
+    font-size: clamp(16px, 2.2vw, 34px);
+    color: #9a97a8;
+    margin-top: 1vh;
+  }
+  #main-sub .out-tag {
+    color: #f0a030;
+    border: 1px solid #f0a030;
+    border-radius: 999px;
+    padding: 0.05em 0.6em;
+    margin-right: 0.6em;
+    font-size: 0.78em;
+    letter-spacing: 0.1em;
+  }
+
+  /* 下段: 操作側と同じタブの一覧 */
+  .list-wrap {
+    border-top: 1px solid #26263a;
+    padding-top: 1.2vh;
+    margin-top: 0.6vh;
+  }
+  .list-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 2vw;
+    margin-bottom: 0.9vh;
+  }
+  #list-title {
+    font-size: clamp(14px, 1.8vw, 24px);
+    letter-spacing: 0.18em;
+    color: #9a97a8;
+  }
+  #list-title b { color: #f5f2ea; font-weight: 700; }
+  #conn {
+    font-size: clamp(12px, 1.4vw, 18px);
+    color: #6d6a7d;
+    text-align: right;
+    white-space: nowrap;
+  }
+  #conn .dot {
+    display: inline-block;
+    width: 0.6em; height: 0.6em;
+    border-radius: 50%;
+    background: #666;
+    margin-right: 0.4em;
+    vertical-align: baseline;
+  }
+  #conn.ok .dot { background: #57d977; }
+  #conn.ng .dot { background: #ff5252; }
+  #rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6vh;
+    max-height: 27vh;
+    overflow: hidden;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 1.2vw;
+    padding: 0.65vh 1vw;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border-left: 4px solid transparent;
+    min-height: 0;
+  }
+  .row.is-main {
+    border-left-color: #f0a030;
+    background: rgba(240, 160, 48, 0.09);
+  }
+  .row .r-label {
+    flex: 1;
+    font-size: clamp(16px, 2vw, 30px);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row .r-sub {
+    font-size: clamp(12px, 1.4vw, 20px);
+    color: #9a97a8;
+    white-space: nowrap;
+  }
+  .row .r-time {
+    font-size: clamp(18px, 2.4vw, 36px);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .row .r-time.over { color: #ff5252; }
+  .row .r-state {
+    font-size: clamp(11px, 1.3vw, 18px);
+    padding: 0.15em 0.7em;
+    border-radius: 999px;
+    background: #26263a;
+    color: #c9c6d8;
+    white-space: nowrap;
+  }
+  .row .r-state.run { background: rgba(64, 140, 255, 0.25); color: #7db4ff; }
+  .row .r-state.done { background: rgba(87, 217, 119, 0.2); color: #57d977; }
+  .row .r-state.over { background: rgba(255, 82, 82, 0.2); color: #ff5252; }
+  .row .r-badge {
+    font-size: clamp(11px, 1.3vw, 18px);
+    padding: 0.15em 0.6em;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .row .r-badge.out { color: #f0a030; border: 1px solid #f0a030; }
+  .row .r-badge.next { color: #9a97a8; border: 1px solid #4a4763; }
+  .row-empty {
+    font-size: clamp(14px, 1.8vw, 24px);
+    color: #6d6a7d;
+    padding: 0.8vh 0.4vw;
+  }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div>
+      <div class="block-label">現在時刻</div>
+      <div id="clock" class="mono">--:--:--</div>
+      <div id="clock-date"></div>
+    </div>
+    <div class="top-right">
+      <div class="block-label">全体経過</div>
+      <div id="overall" class="mono">--:--</div>
+      <div id="diff" class="mono"></div>
+    </div>
+  </div>
+
+  <div class="center">
+    <div id="main-label">接続待ち</div>
+    <div id="main-time" class="mono">--:--</div>
+    <div id="main-sub">操作側（iPhone）の接続を待っています</div>
+  </div>
+
+  <div class="list-wrap">
+    <div class="list-head">
+      <div id="list-title">操作側のタブ <b>—</b></div>
+      <div id="conn" class="ng"><span class="dot"></span><span id="conn-text">未接続</span></div>
+    </div>
+    <div id="rows"><div class="row-empty">操作側の接続を待っています</div></div>
+  </div>
+
+<script>
+(function () {
+  var state = null;      // 操作側から届いた最新状態
+  var skewMs = 0;        // 操作側時計 - 表示側時計 の推定ずれ
+  var connected = false;
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+
+  // ミリ秒 -> M:SS（1時間以上は H:MM:SS）。負数・超過は呼び出し側で符号を付ける
+  function fmt(ms) {
+    var abs = Math.abs(ms);
+    var h = Math.floor(abs / 3600000);
+    var m = Math.floor((abs % 3600000) / 60000);
+    var s = Math.floor((abs % 60000) / 1000);
+    if (h > 0) return h + ":" + pad(m) + ":" + pad(s);
+    return m + ":" + pad(s);
+  }
+
+  // 秒へ切り上げ（本体のモニター出力表示に合わせる）
+  function fmtCeil(ms) {
+    return fmt(Math.ceil(Math.max(0, ms) / 1000) * 1000);
+  }
+
+  function clockStr(ts) {
+    var d = new Date(ts);
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  // 操作側の「いま」（仮想時刻 = 実時刻 + timeOffset、時計ずれ補正込み）
+  function controllerNow() {
+    var offset = state && typeof state.timeOffset === "number" ? state.timeOffset : 0;
+    return Date.now() + skewMs + offset;
+  }
+
+  function tmRemaining(tm, vNow) {
+    if (tm.done) return 0;
+    return tm.running ? (tm.endAt - vNow) : tm.remaining;
+  }
+
+  function swElapsed(sw, nowReal) {
+    if (!sw) return 0;
+    return sw.running ? sw.accumulated + (nowReal - sw.startedAt) : sw.accumulated;
+  }
+
+  var TAB_NAMES = { cd: "CD（カウントダウン）", tm: "TM（タイマー）", sw: "SW（ストップウォッチ）", calc: "CALC（計算）" };
+
+  // 別モニター出力の対象を引く（選ばれていて実在するときだけ）
+  function resolveOutput(st) {
+    var key = st.activeOutputKey;
+    if (!key || !key.type) return null;
+    if (key.type === "tm") {
+      var timers = st.timers || [];
+      for (var i = 0; i < timers.length; i++) if (timers[i].id === key.id) return { kind: "tm", item: timers[i] };
+      return null;
+    }
+    if (key.type === "cd") {
+      var cds = st.countdownTargets || [];
+      for (var j = 0; j < cds.length; j++) if (cds[j].id === key.id) return { kind: "cd", item: cds[j] };
+      return null;
+    }
+    if (key.type === "sw") return { kind: "sw", item: st.stopwatchState };
+    return null;
+  }
+
+  // 出力が選ばれていないときのメイン選択（従来通り：操作側で開いているタブを優先）
+  function pickMain(st) {
+    var timers = st.timers || [];
+    var cds = st.countdownTargets || [];
+    var runningTm = null, firstTm = null;
+    for (var i = 0; i < timers.length; i++) {
+      if (!firstTm) firstTm = timers[i];
+      if (timers[i].running && !runningTm) runningTm = timers[i];
+    }
+    var nearestCd = null;
+    for (var j = 0; j < cds.length; j++) {
+      if (!nearestCd || cds[j].target < nearestCd.target) nearestCd = cds[j];
+    }
+    var tab = st.currentTab || "tm";
+    if (tab === "tm" && (runningTm || firstTm)) return { kind: "tm", item: runningTm || firstTm };
+    if (tab === "cd" && nearestCd) return { kind: "cd", item: nearestCd };
+    if (tab === "sw") return { kind: "sw", item: st.stopwatchState };
+    if (runningTm) return { kind: "tm", item: runningTm };
+    if (nearestCd) return { kind: "cd", item: nearestCd };
+    if (firstTm) return { kind: "tm", item: firstTm };
+    return { kind: "sw", item: st.stopwatchState };
+  }
+
+  // メイン表示の内容を組み立てる。
+  // 出力中は本体のモニター出力と同じ内容（ラベル表記・steal適用・切り上げ）にそろえる。
+  function buildMainView(st, vNow, realNow) {
+    var output = resolveOutput(st);
+    var fromOutput = !!output;
+    var main = output || pickMain(st);
+    var tmSteal = typeof st.tmSteal === "number" ? st.tmSteal : 0;
+    var cdSteal = typeof st.cdSteal === "number" ? st.cdSteal : 0;
+    var view = { kind: main.kind, item: main.item, fromOutput: fromOutput, over: false, done: false, elapsedMs: 0, diffMs: null };
+
+    if (main.kind === "tm") {
+      var tm = main.item;
+      view.label = tm.label ? (tm.label + " [" + fmt(tm.totalMs) + "]") : fmt(tm.totalMs);
+      if (fromOutput) {
+        var base = tm.running ? (tm.endAt - vNow) : tm.remaining;
+        var off = tmSteal > 0 ? base - tmSteal * 1000 : base;
+        view.done = !!tm.done;
+        view.over = !tm.done && off < 0;
+        view.timeText = tm.done ? "完了" : (view.over ? "+" + fmt(Math.abs(off)) : fmtCeil(off));
+        view.subText = tm.done ? "完了" : (tm.running ? "進行中" : "停止中");
+        view.diffMs = tm.running ? off : null;
+        view.elapsedMs = tm.totalMs - base;
+      } else {
+        // 従来の表示（ラベルはそのまま、stealは進行中のみ適用）
+        view.label = tm.label || "タイマー";
+        var rem = tmRemaining(tm, vNow) - (tm.running && tmSteal > 0 ? tmSteal * 1000 : 0);
+        view.done = !!tm.done;
+        view.over = rem < 0 && tm.running;
+        view.timeText = tm.done ? "0:00" : (view.over ? "+" + fmt(rem) : fmt(Math.max(0, rem)));
+        view.subText = tm.done ? "完了" : (tm.running ? "進行中" : "停止中");
+        view.diffMs = tm.running ? tmRemaining(tm, vNow) : null;
+        view.elapsedMs = tm.totalMs - tmRemaining(tm, vNow);
+      }
+    } else if (main.kind === "cd") {
+      var item = main.item;
+      view.label = item.label || clockStr(item.target);
+      var cdRem = item.target - vNow - (fromOutput && cdSteal > 0 ? cdSteal * 1000 : 0);
+      view.over = cdRem < 0;
+      view.timeText = view.over ? "+" + fmt(Math.abs(cdRem)) : (fromOutput ? fmtCeil(cdRem) : fmt(cdRem));
+      view.subText = view.over ? "時刻を過ぎています" : "目標時刻まで";
+      view.diffMs = null;
+    } else {
+      var el = swElapsed(st.stopwatchState, realNow);
+      view.label = fromOutput ? "SW" : "ストップウォッチ";
+      view.timeText = fmt(el);
+      view.subText = st.stopwatchState && st.stopwatchState.running ? "計測中" : "停止中";
+      view.elapsedMs = el;
+    }
+    return view;
+  }
+
+  // 「つぎ」の対象ID（TM: メインの後ろの未完了 / CD: メインより後の最も近い目標）
+  function pickNextId(st, main) {
+    if (!main) return null;
+    var i, idx;
+    if (main.kind === "tm") {
+      var timers = st.timers || [];
+      idx = timers.indexOf(main.item);
+      for (i = idx + 1; i < timers.length; i++) if (!timers[i].done) return "tm:" + timers[i].id;
+      return null;
+    }
+    if (main.kind === "cd") {
+      var cds = (st.countdownTargets || []).slice().sort(function (a, b) { return a.target - b.target; });
+      for (i = 0; i < cds.length; i++) {
+        if (cds[i].target > main.item.target) return "cd:" + cds[i].id;
+      }
+      return null;
+    }
+    return null;
+  }
+
+  // ---------------- 一覧（操作側と同じタブ・同じ項目・同じ順序） ----------------
+  var listSig = "";
+  var rowTimeEls = {};   // "tm:<id>" 等 -> 時間表示element
+  var rowKindOf = {};    // 同上 -> {kind, item}（毎tickの時間更新用）
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // 一覧の骨組み（行の並び・ラベル・状態）を作る。時刻だけは毎tick別に更新する。
+  function buildRows(st, main, output, nextId) {
+    var tab = st.currentTab || "tm";
+    var rows = [];   // {key, label, sub, stateText, stateCls, badges:[{text,cls}], isMain}
+    var i, it;
+
+    if (tab === "tm") {
+      var timers = st.timers || [];
+      for (i = 0; i < timers.length; i++) {
+        it = timers[i];
+        rows.push({
+          key: "tm:" + it.id, kind: "tm", item: it,
+          label: it.label || fmt(it.totalMs),
+          sub: "全 " + fmt(it.totalMs),
+          stateText: it.done ? "完了" : (it.running ? "進行中" : "停止中"),
+          stateCls: it.done ? "done" : (it.running ? "run" : ""),
+          isMain: main.kind === "tm" && main.item === it,
+          isOut: !!(output && output.kind === "tm" && output.item === it),
+          isNext: nextId === "tm:" + it.id
+        });
+      }
+      if (!rows.length) rows.push({ empty: "タイマーはまだありません" });
+    } else if (tab === "cd") {
+      var cds = st.countdownTargets || [];
+      for (i = 0; i < cds.length; i++) {
+        it = cds[i];
+        rows.push({
+          key: "cd:" + it.id, kind: "cd", item: it,
+          label: it.label || clockStr(it.target),
+          sub: "目標 " + clockStr(it.target),
+          stateText: "カウント中",
+          stateCls: "",
+          isMain: main.kind === "cd" && main.item === it,
+          isOut: !!(output && output.kind === "cd" && output.item === it),
+          isNext: nextId === "cd:" + it.id
+        });
+      }
+      if (!rows.length) rows.push({ empty: "カウントダウンはまだありません" });
+    } else if (tab === "sw") {
+      var sw = st.stopwatchState || { running: false, accumulated: 0, startedAt: null, laps: [] };
+      rows.push({
+        key: "sw:total", kind: "sw", item: sw,
+        label: "ストップウォッチ",
+        sub: "TOTAL",
+        stateText: sw.running ? "計測中" : "停止中",
+        stateCls: sw.running ? "run" : "",
+        isMain: main.kind === "sw",
+        isOut: !!(output && output.kind === "sw"),
+        isNext: false
+      });
+      var laps = sw.laps || [];
+      for (i = laps.length - 1; i >= 0; i--) {
+        var lap = laps[i];
+        rows.push({
+          key: "sw:lap:" + lap.num, kind: "lap", item: lap,
+          label: "LAP " + lap.num,
+          sub: "区間 " + fmt(lap.split),
+          stateText: "合計 " + fmt(lap.total),
+          stateCls: "",
+          isMain: false, isOut: false, isNext: false, fixedTime: fmt(lap.total)
+        });
+      }
+    } else {
+      rows.push({ empty: "CALCタブにはタイマー項目がありません" });
+    }
+    return rows;
+  }
+
+  function renderList(st, main, output, vNow, realNow) {
+    var tab = st.currentTab || "tm";
+    $("list-title").innerHTML = "操作側のタブ <b>" + esc(TAB_NAMES[tab] || tab) + "</b>" +
+      (output ? "　／　別モニター出力の内容を共有中" : "");
+
+    var nextId = pickNextId(st, main);
+    var rows = buildRows(st, main, output, nextId);
+
+    // CD行は目標時刻を過ぎたら「超過」に切り替える
+    for (var k = 0; k < rows.length; k++) {
+      if (rows[k].kind === "cd" && rows[k].item.target - vNow < 0) {
+        rows[k].stateText = "超過";
+        rows[k].stateCls = "over";
+      }
+    }
+
+    // 骨組みの署名（並び・状態・メイン/出力/つぎ が変わったら作り直す）
+    var sig = tab + "|" + (output ? output.kind : "-") + "|" + (nextId || "-");
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      sig += "|" + (r.empty || (r.key + ":" + r.stateText + ":" + (r.isMain ? 1 : 0) + ":" + (r.isOut ? 1 : 0) + ":" + (r.isNext ? 1 : 0)));
+    }
+
+    if (sig !== listSig) {
+      listSig = sig;
+      rowTimeEls = {};
+      rowKindOf = {};
+      var html = "";
+      for (i = 0; i < rows.length; i++) {
+        r = rows[i];
+        if (r.empty) { html += '<div class="row-empty">' + esc(r.empty) + "</div>"; continue; }
+        html += '<div class="row' + (r.isMain ? " is-main" : "") + '">' +
+          '<div class="r-label">' + esc(r.label) + "</div>" +
+          (r.sub ? '<div class="r-sub mono">' + esc(r.sub) + "</div>" : "") +
+          '<div class="r-time mono" data-k="' + esc(r.key) + '">--:--</div>' +
+          '<div class="r-state ' + esc(r.stateCls || "") + '">' + esc(r.stateText) + "</div>" +
+          (r.isOut ? '<div class="r-badge out">出力中</div>' : "") +
+          (r.isNext ? '<div class="r-badge next">つぎ</div>' : "") +
+          "</div>";
+        rowKindOf[r.key] = r;
+      }
+      $("rows").innerHTML = html;
+      var els = $("rows").querySelectorAll(".r-time");
+      for (i = 0; i < els.length; i++) rowTimeEls[els[i].getAttribute("data-k")] = els[i];
+    }
+
+    // 時刻の更新（毎tick）
+    var tmSteal = typeof st.tmSteal === "number" ? st.tmSteal : 0;
+    for (var key in rowKindOf) {
+      var row = rowKindOf[key];
+      var el = rowTimeEls[key];
+      if (!el) continue;
+      if (row.kind === "tm") {
+        var tm = row.item;
+        if (tm.done) { el.textContent = "完了"; el.className = "r-time mono"; }
+        else {
+          var rem = tmRemaining(tm, vNow) - (tm.running && tmSteal > 0 ? tmSteal * 1000 : 0);
+          el.textContent = rem < 0 ? "+" + fmt(rem) : fmt(Math.max(0, rem));
+          el.className = "r-time mono" + (rem < 0 && tm.running ? " over" : "");
+        }
+      } else if (row.kind === "cd") {
+        var cdRem = row.item.target - vNow;
+        el.textContent = cdRem < 0 ? "+" + fmt(cdRem) : fmt(cdRem);
+        el.className = "r-time mono" + (cdRem < 0 ? " over" : "");
+      } else if (row.kind === "sw") {
+        el.textContent = fmt(swElapsed(st.stopwatchState, realNow));
+        el.className = "r-time mono";
+      } else if (row.kind === "lap") {
+        el.textContent = row.fixedTime;
+        el.className = "r-time mono";
+      }
+    }
+  }
+
+  function render() {
+    // 現在時刻（表示側の実時計）
+    var now = new Date();
+    $("clock").textContent = pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+    var days = ["日", "月", "火", "水", "木", "金", "土"];
+    $("clock-date").textContent = (now.getMonth() + 1) + "月" + now.getDate() + "日（" + days[now.getDay()] + "）";
+
+    if (!state) {
+      $("conn").className = connected ? "ok" : "ng";
+      $("conn-text").textContent = connected ? "サーバー接続済み・操作側待ち" : "未接続";
+      return;
+    }
+    $("conn").className = connected ? "ok" : "ng";
+    $("conn-text").textContent = connected ? "接続中" : "再接続中";
+
+    var vNow = controllerNow();
+    var realNow = Date.now() + skewMs;
+    var output = resolveOutput(state);
+    var view = buildMainView(state, vNow, realNow);
+
+    $("main-label").textContent = view.label;
+    var mainTimeEl = $("main-time");
+    mainTimeEl.textContent = view.timeText;
+    mainTimeEl.className = "mono" + (view.over ? " over" : "") + (view.done ? " done" : "");
+    $("main-sub").innerHTML = (view.fromOutput ? '<span class="out-tag">別モニター出力</span>' : "") + esc(view.subText);
+
+    // 全体経過: ストップウォッチを全体タイマーとして使う。未使用ならメインの経過で代用
+    var overall = swElapsed(state.stopwatchState, realNow);
+    if (overall === 0 && view.elapsedMs > 0) overall = view.elapsedMs;
+    $("overall").textContent = fmt(overall);
+
+    // 押し具合: メインTMが超過していれば「押し +M:SS」、進行中なら残りを表示
+    var diffEl = $("diff");
+    if (view.kind === "tm" && view.diffMs !== null) {
+      if (view.diffMs < 0) {
+        diffEl.textContent = "押し +" + fmt(Math.abs(view.diffMs));
+        diffEl.className = "mono over";
+      } else {
+        diffEl.textContent = "残り " + fmt(view.diffMs);
+        diffEl.className = "mono";
+      }
+    } else if (view.kind === "cd" && view.over) {
+      diffEl.textContent = "押し " + view.timeText;
+      diffEl.className = "mono over";
+    } else {
+      diffEl.textContent = "";
+      diffEl.className = "mono";
+    }
+
+    // 下段の一覧（メイン選択に使った main 互換オブジェクトを渡す）
+    renderList(state, { kind: view.kind, item: view.item }, output, vNow, realNow);
+  }
+
+  // ---------------- WebSocket ----------------
+  var retryMs = 1000;
+  function connect() {
+    var ws;
+    try {
+      var proto = location.protocol === "https:" ? "wss://" : "ws://";
+      ws = new WebSocket(proto + location.host + "/ws");
+    } catch (e) { scheduleRetry(); return; }
+    ws.onopen = function () { connected = true; retryMs = 1000; render(); };
+    ws.onclose = function () { connected = false; scheduleRetry(); render(); };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+    ws.onmessage = function (ev) {
+      try {
+        var msg = JSON.parse(ev.data);
+        if (msg && msg.type === "state" && msg.state) {
+          state = msg.state;
+          if (typeof state.sentAt === "number") {
+            // 操作側との時計ずれを推定（LAN内の遅延はごく小さい前提）
+            skewMs = state.sentAt - Date.now();
+          }
+          render();
+        }
+      } catch (e) {}
+    };
+  }
+  function scheduleRetry() {
+    setTimeout(connect, retryMs);
+    retryMs = Math.min(retryMs * 2, 10000);
+  }
+
+  connect();
+
+  // iPhone同士連携（P2P）から状態を受け取るためのフック（pair-display.js が使う）
+  window.__tkReceiveStateText = function (text) {
+    try {
+      var msg = JSON.parse(text);
+      if (msg && msg.type === "state" && msg.state) {
+        state = msg.state;
+        if (typeof state.sentAt === "number") {
+          skewMs = state.sentAt - Date.now();
+        }
+        render();
+      }
+    } catch (e) {}
+  };
+  window.__tkSetP2PConnected = function (v) {
+    connected = !!v;
+    render();
+  };
+
+  setInterval(render, 100);
+  render();
+})();
+</script>
+  <script src="vendor/qrcode.js"></script>
+  <script src="vendor/jsQR.js"></script>
+  <script src="vendor/lz-string.min.js"></script>
+  <script src="p2p.js"></script>
+  <script src="pair-display.js"></script>
+</body>
+</html>
